@@ -1,10 +1,20 @@
 // Import
 const uuid = require('uuid');
-const path = require('path');
 const fs = require('fs');
 const { Product, ProductInfo } = require('../models/models');
 const ApiError = require('../error/ApiError');
 const { Op } = require('sequelize');
+const AWS = require('aws-sdk');
+
+// Configure AWS SDK
+AWS.config.update({
+	accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+	secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+	region: process.env.AWS_REGION
+});
+
+// Create S3 instance
+const s3 = new AWS.S3();
 
 class ProductController {
 	async create(req, res, next) {
@@ -12,9 +22,16 @@ class ProductController {
 			let { name, price, gender, size, color, brandId, typeId, info } = req.body; // Get data from the body of the request
 			const { img } = req.files; // Get file
 			size = size.split(','); // We turn into an array for the correct work
-			let fileName = uuid.v4() + '.jpg'; // Create name for file
-			img.mv(path.resolve(__dirname, '..', 'static', fileName)); // We transfer the file to the folder static
-			const product = await Product.create({ name, price, gender, size, color, brandId, typeId, img: fileName }); // Create product, raiting default 0
+
+			const fileContent = fs.readFileSync(img.tempFilePath); // Read file content
+			const params = {
+				Bucket: process.env.AWS_BUCKET_NAME, // Your S3 bucket name
+				Key: `images/${uuid.v4()}.jpg`, // File name in S3
+				Body: fileContent
+			};
+			const uploadedFile = await s3.upload(params).promise(); // Upload file to S3
+
+			const product = await Product.create({ name, price, gender, size, color, brandId, typeId, img: uploadedFile.Location }); // Create product, raiting default 0
 
 			if (info) {
 				info = JSON.parse(info); // Parse string in JS object
@@ -55,17 +72,28 @@ class ProductController {
 				return next(ApiError.notFound(`Product with id ${id} not found`));
 			}
 
-			// We form a new file name for image
-			const fileName = uuid.v4() + '.jpg';
+			let fileName = product.img;
 
-			// If there is a new image, we move it to the static folder
 			if (image) {
-				const filePath = path.resolve(__dirname, '..', 'static', product.img); // We get the path to the file
-				if (fs.existsSync(filePath)) {
-					fs.unlinkSync(filePath); // We delete the file from the file system
+				// Delete the old image from S3
+				const oldFileKey = product.img.split('.com/')[1];
+				if (oldFileKey) {
+					const deleteParams = {
+						Bucket: process.env.AWS_BUCKET_NAME,
+						Key: oldFileKey,
+					};
+					await s3.deleteObject(deleteParams).promise();
 				}
 
-				image.mv(path.resolve(__dirname, '..', 'static', fileName));
+				// read the contents of the new file and upload it to S3
+				const fileContent = fs.readFileSync(image.tempFilePath);
+				const uploadParams = {
+					Bucket: process.env.AWS_BUCKET_NAME,
+					Key: `images/${uuid.v4()}.jpg`,
+					Body: fileContent,
+				};
+				const uploadedFile = await s3.upload(uploadParams).promise();
+				fileName = uploadedFile.Location; // Update the file name to a new location in S3
 			}
 
 			// We update the product data
@@ -78,7 +106,7 @@ class ProductController {
 					color,
 					brandId,
 					typeId,
-					img: image ? fileName : product.img // If there is a new image, we update the link to the image, otherwise we leave the old link
+					img: fileName, // We use a new image arrangement if a new image is provided
 				},
 				{ where: { id } }
 			);
@@ -119,10 +147,14 @@ class ProductController {
 				return next(ApiError.badRequest(`Product not found`)); // If the product is not found, we return the error 404
 			}
 
-			const filePath = path.resolve(__dirname, '..', 'static', product.img); // We get the path to the file
-
-			if (fs.existsSync(filePath)) {
-				fs.unlinkSync(filePath); // We delete the file from the file system
+			// Delete the image from S3
+			const fileKey = product.img.split('.com/')[1];
+			if (fileKey) {
+				const deleteParams = {
+					Bucket: process.env.AWS_BUCKET_NAME,
+					Key: fileKey,
+				};
+				await s3.deleteObject(deleteParams).promise();
 			}
 
 			await Product.destroy({ where: { id } }); // We delete the product from the database
