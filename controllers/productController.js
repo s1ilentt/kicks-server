@@ -22,8 +22,8 @@ class ProductController {
 			let { name, price, gender, size, color, brandId, typeId, info } = req.body; // Get data from the body of the request
 			const { img } = req.files; // Get file
 			size = size.split(','); // We turn into an array for the correct work
-
-			const fileContent = fs.readFileSync(img.tempFilePath); // Read file content
+			
+			const fileContent = img.data; // Read file content
 			const params = {
 				Bucket: process.env.AWS_BUCKET_NAME, // Your S3 bucket name
 				Key: `images/${uuid.v4()}.jpg`, // File name in S3
@@ -86,7 +86,7 @@ class ProductController {
 				}
 
 				// read the contents of the new file and upload it to S3
-				const fileContent = fs.readFileSync(image.tempFilePath);
+				const fileContent = image.data;
 				const uploadParams = {
 					Bucket: process.env.AWS_BUCKET_NAME,
 					Key: `images/${uuid.v4()}.jpg`,
